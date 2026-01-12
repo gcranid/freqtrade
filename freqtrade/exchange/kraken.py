@@ -12,13 +12,17 @@ from freqtrade.enums import MarginMode, TradingMode
 from freqtrade.exceptions import DDosProtection, OperationalException, TemporaryError
 from freqtrade.exchange import Exchange
 from freqtrade.exchange.common import retrier
-from freqtrade.exchange.exchange_types import CcxtBalances, FtHas, Tickers
+from freqtrade.exchange.exchange_types import CcxtBalances, FtHas
 
 
 logger = logging.getLogger(__name__)
 
 
 class Kraken(Exchange):
+    """Kraken exchange class.
+    Contains adjustments needed for Freqtrade to work with this exchange.
+    """
+
     _params: dict = {"trading_agreement": "agree"}
     _ft_has: FtHas = {
         "stoploss_on_exchange": True,
@@ -31,11 +35,10 @@ class Kraken(Exchange):
         "trades_pagination_arg": "since",
         "trades_pagination_overlap": False,
         "trades_has_history": True,
-        "mark_ohlcv_timeframe": "4h",
     }
 
     _supported_trading_mode_margin_pairs: list[tuple[TradingMode, MarginMode]] = [
-        # TradingMode.SPOT always supported and not required in this list
+        (TradingMode.SPOT, MarginMode.NONE),
         # (TradingMode.MARGIN, MarginMode.CROSS),
         # (TradingMode.FUTURES, MarginMode.CROSS)
     ]
@@ -49,18 +52,6 @@ class Kraken(Exchange):
 
         return parent_check and market.get("darkpool", False) is False
 
-    def get_tickers(
-        self,
-        symbols: list[str] | None = None,
-        *,
-        cached: bool = False,
-        market_type: TradingMode | None = None,
-    ) -> Tickers:
-        # Only fetch tickers for current stake currency
-        # Otherwise the request for kraken becomes too large.
-        symbols = list(self.get_markets(quote_currencies=[self._config["stake_currency"]]))
-        return super().get_tickers(symbols=symbols, cached=cached, market_type=market_type)
-
     def consolidate_balances(self, balances: CcxtBalances) -> CcxtBalances:
         """
         Consolidate balances for the same currency.
@@ -69,7 +60,7 @@ class Kraken(Exchange):
         consolidated: CcxtBalances = {}
         for currency, balance in balances.items():
             base_currency = currency[:-2] if currency.endswith(".F") else currency
-            base_currency = self._api.commonCurrencies.get(base_currency, base_currency)
+
             if base_currency in consolidated:
                 consolidated[base_currency]["free"] += balance["free"]
                 consolidated[base_currency]["used"] += balance["used"]
@@ -79,7 +70,7 @@ class Kraken(Exchange):
         return consolidated
 
     @retrier
-    def get_balances(self) -> CcxtBalances:
+    def get_balances(self, params: dict | None = None) -> CcxtBalances:
         if self._config["dry_run"]:
             return {}
 
@@ -90,7 +81,7 @@ class Kraken(Exchange):
             balances.pop("free", None)
             balances.pop("total", None)
             balances.pop("used", None)
-            self._log_exchange_response("fetch_balances", balances)
+            self._log_exchange_response("fetch_balance", balances)
 
             # Consolidate balances
             balances = self.consolidate_balances(balances)
@@ -112,7 +103,7 @@ class Kraken(Exchange):
                 balances[bal]["used"] = sum(order[1] for order in order_list if order[0] == bal)
                 balances[bal]["free"] = balances[bal]["total"] - balances[bal]["used"]
 
-            self._log_exchange_response("fetch_balances2", balances)
+            self._log_exchange_response("fetch_balance2", balances)
             return balances
         except ccxt.DDoSProtection as e:
             raise DDosProtection(e) from e

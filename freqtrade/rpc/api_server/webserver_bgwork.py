@@ -1,7 +1,7 @@
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired
 from uuid import uuid4
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from freqtrade.exchange.exchange import Exchange
 
@@ -37,7 +37,7 @@ class ApiBG:
 
     # Generic background jobs
 
-    # TODO: Change this to TTLCache
+    # TODO: Change this to FtTTLCache
     jobs: dict[str, JobsContainer] = {}
     # Pairlist evaluate things
     pairlist_running: bool = False

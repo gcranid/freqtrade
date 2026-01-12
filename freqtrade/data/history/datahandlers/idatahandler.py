@@ -8,7 +8,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pandas import DataFrame, to_datetime
@@ -118,8 +118,8 @@ class IDataHandler(ABC):
         df = self._ohlcv_load(pair, timeframe, None, candle_type)
         if df.empty:
             return (
-                datetime.fromtimestamp(0, tz=timezone.utc),
-                datetime.fromtimestamp(0, tz=timezone.utc),
+                datetime.fromtimestamp(0, tz=UTC),
+                datetime.fromtimestamp(0, tz=UTC),
                 0,
             )
         return df.iloc[0]["date"].to_pydatetime(), df.iloc[-1]["date"].to_pydatetime(), len(df)
@@ -201,8 +201,8 @@ class IDataHandler(ABC):
         df = self._trades_load(pair, trading_mode)
         if df.empty:
             return (
-                datetime.fromtimestamp(0, tz=timezone.utc),
-                datetime.fromtimestamp(0, tz=timezone.utc),
+                datetime.fromtimestamp(0, tz=UTC),
+                datetime.fromtimestamp(0, tz=UTC),
                 0,
             )
         return (
@@ -397,6 +397,9 @@ class IDataHandler(ABC):
         pairdf = self._ohlcv_load(
             pair, timeframe, timerange=timerange_startup, candle_type=candle_type
         )
+        if not pairdf.empty and candle_type == CandleType.FUNDING_RATE:
+            # Funding rate data is sometimes off by a couple of ms - floor to seconds
+            pairdf["date"] = pairdf["date"].dt.floor("s")
         if self._check_empty_df(pairdf, pair, timeframe, candle_type, warn_no_data):
             return pairdf
         else:
@@ -508,8 +511,15 @@ class IDataHandler(ABC):
         Applies to bybit and okx, where funding-fee and mark candles have different timeframes.
         """
         paircombs = self.ohlcv_get_available_data(self._datadir, TradingMode.FUTURES)
+        ff_timeframe_s = timeframe_to_seconds(ff_timeframe)
+
         funding_rate_combs = [
-            f for f in paircombs if f[2] == CandleType.FUNDING_RATE and f[1] != ff_timeframe
+            f
+            for f in paircombs
+            if f[2] == CandleType.FUNDING_RATE
+            and f[1] != ff_timeframe
+            # Only allow smaller timeframes to move from smaller to larger timeframes
+            and timeframe_to_seconds(f[1]) < ff_timeframe_s
         ]
 
         if funding_rate_combs:

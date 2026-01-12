@@ -52,6 +52,12 @@ class Wallets:
         self._last_wallet_refresh: datetime | None = None
         self.update()
 
+    def __repr__(self) -> str:
+        return (
+            f"Wallets(stake_currency={self._stake_currency}, start_cap={self._start_cap}, "
+            f"wallets={len(self._wallets)}, positions={len(self._positions)})"
+        )
+
     def get_free(self, currency: str) -> float:
         balance = self._wallets.get(currency)
         if balance and balance.free:
@@ -197,8 +203,11 @@ class Wallets:
                 # Position is not open ...
                 continue
             size = self._exchange._contracts_to_amount(symbol, position["contracts"])
-            collateral = safe_value_fallback(position, "collateral", "initialMargin", 0.0)
-            leverage = position.get("leverage")
+            collateral = safe_value_fallback(position, "initialMargin", "collateral", 0.0)
+            leverage: float | None = position.get("leverage")
+            if not leverage:
+                trade = Trade.get_trades_proxy(is_open=True, pair=symbol)
+                leverage = trade[0].leverage if trade else None
             _parsed_positions[symbol] = PositionWallet(
                 symbol,
                 position=size,
@@ -352,7 +361,7 @@ class Wallets:
         return max(stake_amount, 0)
 
     def get_trade_stake_amount(
-        self, pair: str, max_open_trades: IntOrInf, edge=None, update: bool = True
+        self, pair: str, max_open_trades: IntOrInf, update: bool = True
     ) -> float:
         """
         Calculate stake amount for the trade
@@ -366,19 +375,11 @@ class Wallets:
         val_tied_up = Trade.total_open_trades_stakes()
         available_amount = self.get_available_stake_amount()
 
-        if edge:
-            stake_amount = edge.stake_amount(
-                pair,
-                self.get_free(self._stake_currency),
-                self.get_total(self._stake_currency),
-                val_tied_up,
+        stake_amount = self._config["stake_amount"]
+        if stake_amount == UNLIMITED_STAKE_AMOUNT:
+            stake_amount = self._calculate_unlimited_stake_amount(
+                available_amount, val_tied_up, max_open_trades
             )
-        else:
-            stake_amount = self._config["stake_amount"]
-            if stake_amount == UNLIMITED_STAKE_AMOUNT:
-                stake_amount = self._calculate_unlimited_stake_amount(
-                    available_amount, val_tied_up, max_open_trades
-                )
 
         return self._check_available_stake_amount(stake_amount, available_amount)
 
@@ -390,7 +391,7 @@ class Wallets:
         max_stake_amount: float,
         trade_amount: float | None,
     ):
-        if not stake_amount:
+        if not stake_amount or isinstance(stake_amount, str) or stake_amount <= 0:
             self._local_log(
                 f"Stake amount is {stake_amount}, ignoring possible trade for {pair}.",
                 level="debug",

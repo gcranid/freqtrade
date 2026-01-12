@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.exceptions import HTTPException
 
+from freqtrade.configuration import remove_exchange_credentials
 from freqtrade.configuration.config_validation import validate_config_consistency
 from freqtrade.constants import Config
 from freqtrade.data.btanalysis import (
@@ -20,7 +21,6 @@ from freqtrade.data.btanalysis import (
 )
 from freqtrade.enums import BacktestState
 from freqtrade.exceptions import ConfigurationError, DependencyException, OperationalException
-from freqtrade.exchange.common import remove_exchange_credentials
 from freqtrade.ft_types import get_BacktestResultType_default
 from freqtrade.misc import deep_merge_dicts, is_file_in_dir
 from freqtrade.rpc.api_server.api_schemas import (
@@ -52,30 +52,25 @@ def __run_backtest_bg(btconfig: Config):
         lastconfig = ApiBG.bt["last_config"]
         strat = StrategyResolver.load_strategy(btconfig)
         validate_config_consistency(btconfig)
-
-        if (
-            not ApiBG.bt["bt"]
-            or lastconfig.get("timeframe") != strat.timeframe
+        time_settings_changed = (
+            lastconfig.get("timeframe") != strat.timeframe
             or lastconfig.get("timeframe_detail") != btconfig.get("timeframe_detail")
             or lastconfig.get("timerange") != btconfig["timerange"]
-        ):
+        )
+
+        if not ApiBG.bt["bt"] or time_settings_changed:
             from freqtrade.optimize.backtesting import Backtesting
 
             ApiBG.bt["bt"] = Backtesting(btconfig)
-            ApiBG.bt["bt"].load_bt_data_detail()
         else:
-            ApiBG.bt["bt"].config = btconfig
+            ApiBG.bt["bt"].config = deep_merge_dicts(btconfig, ApiBG.bt["bt"].config)
             ApiBG.bt["bt"].init_backtest()
-        # Only reload data if timeframe changed.
-        if (
-            not ApiBG.bt["data"]
-            or not ApiBG.bt["timerange"]
-            or lastconfig.get("timeframe") != strat.timeframe
-            or lastconfig.get("timerange") != btconfig["timerange"]
-        ):
+        # Only reload data if timerange is open or settings changed
+        if not ApiBG.bt["data"] or not ApiBG.bt["timerange"] or time_settings_changed:
             ApiBG.bt["data"], ApiBG.bt["timerange"] = ApiBG.bt["bt"].load_bt_data()
 
         lastconfig["timerange"] = btconfig["timerange"]
+        lastconfig["timeframe_detail"] = btconfig.get("timeframe_detail")
         lastconfig["timeframe"] = strat.timeframe
         lastconfig["enable_protections"] = btconfig.get("enable_protections")
         lastconfig["dry_run_wallet"] = btconfig.get("dry_run_wallet")
@@ -96,7 +91,10 @@ def __run_backtest_bg(btconfig: Config):
             )
 
             ApiBG.bt["bt"].results = generate_backtest_stats(
-                ApiBG.bt["data"], ApiBG.bt["bt"].all_results, min_date=min_date, max_date=max_date
+                ApiBG.bt["data"],
+                ApiBG.bt["bt"].all_bt_content,
+                min_date=min_date,
+                max_date=max_date,
             )
 
             if btconfig.get("export", "none") == "trades":
@@ -108,10 +106,13 @@ def __run_backtest_bg(btconfig: Config):
                     ApiBG.bt["bt"].results,
                     datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
                     market_change_data=combined_res,
+                    strategy_files={
+                        s.get_strategy_name(): s.__file__ for s in ApiBG.bt["bt"].strategylist
+                    },
                 )
                 ApiBG.bt["bt"].results["metadata"][strategy_name]["filename"] = str(fn.stem)
                 ApiBG.bt["bt"].results["metadata"][strategy_name]["strategy"] = strategy_name
-
+        ApiBG.bt["bt"].reset_backtest()
         logger.info("Backtest finished.")
 
     except ConfigurationError as e:

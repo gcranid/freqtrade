@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +64,7 @@ def get_required_data_timerange(config: Config) -> TimeRange:
     Used to compute the required data download time range
     for auto data-download in FreqAI
     """
-    time = datetime.now(tz=timezone.utc).timestamp()
+    time = datetime.now(tz=UTC).timestamp()
 
     timeframes = config["freqai"]["feature_parameters"].get("include_timeframes")
 
@@ -97,7 +97,7 @@ def plot_feature_importance(
     """
     Plot Best and worst features by importance for a single sub-train.
     :param model: Any = A model which was `fit` using a common library
-                        such as catboost or lightgbm
+                        such as XGBoost or lightgbm
     :param pair: str = pair e.g. BTC/USD
     :param dk: FreqaiDataKitchen = non-persistent data container for current coin/loop
     :param count_max: int = the amount of features to be loaded per column
@@ -115,6 +115,8 @@ def plot_feature_importance(
     for label in models:
         mdl = models[label]
         if "catboost.core" in str(mdl.__class__):
+            # CatBoost is no longer actively supported since 2025.12
+            # However users can still use it in their custom models
             feature_importance = mdl.get_feature_importance()
         elif "lightgbm.sklearn" in str(mdl.__class__):
             feature_importance = mdl.feature_importances_
